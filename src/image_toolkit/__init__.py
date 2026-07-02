@@ -20,6 +20,7 @@ from .core import (
     thumbnail,
     grayscale,
     watermark,
+    montage,
     info,
     ImageInfo,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "thumbnail",
     "grayscale",
     "watermark",
+    "montage",
     "info",
     "ImageInfo",
 ]

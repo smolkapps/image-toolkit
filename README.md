@@ -43,6 +43,7 @@ to walk subdirectories, mirroring the tree under the output dir).
 | `thumbnail IN --size 200 --outdir thumbs/` | Thumbnail, longest side ≤ size |
 | `grayscale IN -o OUT` | Convert to grayscale (mode `L`) |
 | `watermark IN --text "© 2026" --position bottom-right --opacity 0.5 -o OUT` | Text watermark |
+| `montage IN --columns 4 --cell 200 -o sheet.png` | Tile many images into one contact sheet |
 | `info IN` | Print format, size, mode, has-exif |
 
 ### Examples
@@ -65,6 +66,9 @@ image-toolkit thumbnail ./photos --size 200 --outdir ./thumbs
 
 # Watermark, semi-transparent, bottom-right
 image-toolkit watermark photo.jpg --text "© 2026 me" --opacity 0.4 -o out.jpg
+
+# Build a contact sheet from a folder (auto near-square grid)
+image-toolkit montage ./photos --cell 240 -o contact-sheet.png
 
 # Inspect
 image-toolkit info photo.jpg

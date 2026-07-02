@@ -126,6 +126,58 @@ def test_cli_thumbnail_outdir(make_image, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# montage via CLI
+# --------------------------------------------------------------------------- #
+def test_cli_montage_directory(populated_dir, tmp_path, capsys):
+    out = tmp_path / "sheet.png"
+    rc = run(
+        [
+            "montage",
+            str(populated_dir),
+            "--cell",
+            "40",
+            "--columns",
+            "2",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert out.exists()
+    assert f"wrote {out}" in capsys.readouterr().out
+    with Image.open(out) as img:
+        # 3 top-level images, 2 columns -> 2 rows.
+        assert img.size == (8 + 2 * (40 + 8), 8 + 2 * (40 + 8))
+
+
+def test_cli_montage_recursive(populated_dir, tmp_path):
+    out = tmp_path / "sheet.png"
+    rc = run(
+        [
+            "montage",
+            str(populated_dir),
+            "--recursive",
+            "--columns",
+            "4",
+            "--cell",
+            "20",
+            "-o",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    with Image.open(out) as img:
+        # 3 top-level + 1 nested = 4 images, one row of 4.
+        assert img.size == (8 + 4 * (20 + 8), 8 + 1 * (20 + 8))
+
+
+def test_cli_montage_no_inputs_nonzero(tmp_path, capsys):
+    rc = run(["montage", str(tmp_path / "empty"), "-o", str(tmp_path / "s.png")])
+    assert rc == 2
+    assert "no matching input" in capsys.readouterr().err.lower()
+
+
+# --------------------------------------------------------------------------- #
 # error handling / exit codes
 # --------------------------------------------------------------------------- #
 def test_cli_missing_input_nonzero(tmp_path, capsys):

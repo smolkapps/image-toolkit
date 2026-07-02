@@ -8,12 +8,13 @@ clean stderr message instead of a traceback.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
-from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
 
 PathLike = Union[str, os.PathLike]
 
@@ -571,3 +572,142 @@ def watermark(
     else:
         final = composited
     return _save(final, out, fmt, keep_exif=keep_exif, src=src)
+
+
+# --------------------------------------------------------------------------- #
+# montage (contact sheet)
+# --------------------------------------------------------------------------- #
+def _parse_color(value) -> Tuple[int, int, int]:
+    """Accept an (r, g, b) tuple, a #RRGGBB / #RGB hex string, or a name."""
+    if isinstance(value, tuple):
+        if len(value) != 3 or not all(
+            isinstance(c, int) and 0 <= c <= 255 for c in value
+        ):
+            raise ImageToolkitError(
+                f"invalid color tuple {value!r}; expected (r, g, b) with each "
+                "component an int in 0..255"
+            )
+        return value
+    s = str(value).strip()
+    if s.startswith("#"):
+        h = s[1:]
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        if len(h) == 6:
+            try:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            except ValueError:
+                pass
+        raise ImageToolkitError(f"invalid hex color {value!r}")
+    # Fall back to Pillow's named-color table (e.g. "white", "black").
+    try:
+        from PIL import ImageColor
+
+        return ImageColor.getrgb(s)
+    except (ValueError, ImportError) as exc:
+        raise ImageToolkitError(f"invalid color {value!r}") from exc
+
+
+def _thumb_for_cell(path: PathLike, cell: int) -> Image.Image:
+    """Open ``path`` lazily and return an EXIF-corrected RGBA thumbnail that
+    fits within a ``cell`` x ``cell`` box (never upscaled).
+
+    Opening lazily (without a full-resolution decode) lets us hint the JPEG
+    decoder with ``draft`` and thumbnail *before* the RGBA conversion, so large
+    JPEGs are decoded at roughly cell resolution instead of full size. EXIF
+    orientation is applied via :func:`ImageOps.exif_transpose` so portrait phone
+    photos are not rendered sideways. Only the first frame of an animated image
+    (e.g. a GIF) is used. Raises the typed :class:`ImageToolkitError` subclasses
+    on a missing path or an undecodable image.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise InputNotFoundError(f"input not found: {p}")
+    if not p.is_file():
+        raise InputNotFoundError(f"input is not a file: {p}")
+    try:
+        src = Image.open(p)  # lazy: header only, no full decode yet
+        # Ask the decoder for an image no larger than the cell (JPEG-only hint;
+        # a no-op for other formats) then thumbnail before converting to RGBA.
+        src.draft("RGB", (cell, cell))
+        src.thumbnail((cell, cell), Image.LANCZOS)
+    except UnidentifiedImageError as exc:
+        raise UnsupportedFormatError(f"cannot identify image file: {p}") from exc
+    except OSError as exc:  # truncated / unreadable
+        raise UnsupportedFormatError(f"cannot read image file {p}: {exc}") from exc
+    return ImageOps.exif_transpose(src).convert("RGBA")
+
+
+def montage(
+    in_paths,
+    out: PathLike,
+    *,
+    columns: Optional[int] = None,
+    cell: int = 200,
+    padding: int = 8,
+    background="#ffffff",
+) -> Path:
+    """Arrange many images into a single contact-sheet grid.
+
+    Each input is thumbnailed to fit within a ``cell`` x ``cell`` box (never
+    upscaled) and centered in its grid slot. EXIF orientation is honored, so
+    portrait photos are not laid sideways, and only the first frame of an
+    animated image (e.g. a GIF) is used. Unreadable or missing inputs are
+    skipped; at least one input must be a valid image.
+
+    If ``columns`` is None a near-square grid is chosen automatically; an
+    explicit ``columns`` is respected as-is (even when it exceeds the number of
+    images, giving a fixed-width sheet with trailing empty cells). ``background``
+    may be an (r, g, b) tuple, a ``#RRGGBB`` hex string, or a color name.
+
+    ``out`` is written unconditionally: an existing file at that path is
+    silently overwritten.
+    """
+    if cell <= 0:
+        raise ImageToolkitError("--cell must be a positive integer")
+    if padding < 0:
+        raise ImageToolkitError("--padding must be zero or positive")
+
+    paths = [Path(p) for p in in_paths]
+    if not paths:
+        raise ImageToolkitError("montage needs at least one input image")
+
+    bg = _parse_color(background)
+
+    thumbs = []
+    for p in paths:
+        try:
+            thumbs.append(_thumb_for_cell(p, cell))
+        except ImageToolkitError:
+            # Skip anything missing or undecodable; keep the sheet going. Catch
+            # the base error so a missing file/dir doesn't abort the whole run.
+            continue
+
+    if not thumbs:
+        raise ImageToolkitError("no readable images to build a montage from")
+
+    n = len(thumbs)
+    if columns is None:
+        columns = max(1, int(math.ceil(math.sqrt(n))))
+    else:
+        if columns <= 0:
+            raise ImageToolkitError("--columns must be a positive integer")
+        # Respect an explicit column count verbatim (never clamp to n) so a
+        # fixed-width sheet is possible across differently sized batches.
+    rows = int(math.ceil(n / columns))
+
+    sheet_w = padding + columns * (cell + padding)
+    sheet_h = padding + rows * (cell + padding)
+    sheet = Image.new("RGB", (sheet_w, sheet_h), bg)
+
+    for idx, thumb in enumerate(thumbs):
+        row, col = divmod(idx, columns)
+        cell_x = padding + col * (cell + padding)
+        cell_y = padding + row * (cell + padding)
+        # Center the (possibly smaller) thumbnail within its cell.
+        off_x = cell_x + (cell - thumb.width) // 2
+        off_y = cell_y + (cell - thumb.height) // 2
+        sheet.paste(thumb, (off_x, off_y), mask=thumb.split()[-1])
+
+    fmt = normalize_format(Path(out).suffix or "png")
+    return _save(sheet, out, fmt, keep_exif=False)

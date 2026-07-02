@@ -139,6 +139,30 @@ def cmd_watermark(args) -> int:
     return _dispatch(args, op, {})
 
 
+def cmd_montage(args) -> int:
+    # Many-to-one: gather all inputs and emit a single contact-sheet image.
+    recursive = getattr(args, "recursive", False)
+    inputs = collect_inputs(args.input, recursive=recursive)
+    if not inputs:
+        _err(f"no matching input images for {args.input!r}")
+        return 2
+    out = Path(args.out) if args.out else Path("montage.png")
+    try:
+        result = core.montage(
+            inputs,
+            out,
+            columns=args.columns,
+            cell=args.cell,
+            padding=args.padding,
+            background=args.background,
+        )
+    except ImageToolkitError as exc:
+        _err(str(exc))
+        return 1
+    print(f"wrote {result}")
+    return 0
+
+
 def cmd_info(args) -> int:
     recursive = getattr(args, "recursive", False)
     inputs = collect_inputs(args.input, recursive=recursive)
@@ -182,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="image-toolkit",
         description="Batch image processing: convert, resize, strip metadata, "
-        "rotate/flip, thumbnail, grayscale, watermark, info.",
+        "rotate/flip, thumbnail, grayscale, watermark, montage, info.",
     )
     parser.add_argument(
         "--version", action="version", version=f"image-toolkit {__version__}"
@@ -275,6 +299,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_io_args(p)
     p.set_defaults(func=cmd_watermark)
+
+    # montage
+    p = sub.add_parser(
+        "montage", help="tile many images into a single contact-sheet grid"
+    )
+    p.add_argument("input", help="image file, directory, or glob")
+    p.add_argument(
+        "--columns",
+        type=int,
+        default=None,
+        help="grid columns (default: near-square; an explicit value is used "
+        "as-is, even if it exceeds the image count)",
+    )
+    p.add_argument(
+        "--cell", type=int, default=200, help="max thumbnail box in px (default 200)"
+    )
+    p.add_argument(
+        "--padding", type=int, default=8, help="gap between cells in px (default 8)"
+    )
+    p.add_argument(
+        "--background",
+        default="#ffffff",
+        help="sheet background: name or #RRGGBB (default white)",
+    )
+    p.add_argument(
+        "-o",
+        "--out",
+        help="output image file (default montage.png; an existing file at this "
+        "path is silently overwritten)",
+    )
+    p.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="recurse into subdirectories when INPUT is a directory",
+    )
+    p.set_defaults(func=cmd_montage)
 
     # info
     p = sub.add_parser("info", help="print format/size/mode/has-exif")
