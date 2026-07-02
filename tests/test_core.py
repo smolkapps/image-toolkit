@@ -379,6 +379,88 @@ def test_montage_rejects_bad_cell(make_image, tmp_path):
         core.montage([src], tmp_path / "sheet.png", cell=0)
 
 
+def _close(a, b, tol=12):
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def test_montage_actually_pastes_tiles_at_expected_positions(make_image, tmp_path):
+    # Behavioral guard: sample each tile's center and the gap between tiles.
+    # A montage that pastes nothing (or at wrong offsets/order) must FAIL here,
+    # not just pass the canvas-dimension checks.
+    c0 = (0, 128, 255)
+    c1 = (12, 200, 60)
+    # Sources larger than the cell so real downscaling happens; the top-left
+    # block from the fixture stays well away from each tile center.
+    s0 = make_image("t0.png", size=(120, 120), color=c0)
+    s1 = make_image("t1.png", size=(120, 120), color=c1)
+    cell, pad = 60, 10
+    out = core.montage(
+        [s0, s1],
+        tmp_path / "sheet.png",
+        columns=2,
+        cell=cell,
+        padding=pad,
+        background="#ff00ff",
+    )
+    with Image.open(out).convert("RGB") as img:
+        cy = pad + cell // 2
+        # tile 0 center shows the first source's color
+        assert img.getpixel((pad + cell // 2, cy)) == c0
+        # tile 1 center (second column) shows the second source's color
+        assert img.getpixel((pad + (cell + pad) + cell // 2, cy)) == c1
+        # the padding strip between the two tiles is background
+        assert img.getpixel((pad + cell + pad // 2, cy)) == (255, 0, 255)
+
+
+def test_montage_applies_exif_orientation(tmp_path):
+    # A landscape 100x50 image tagged orientation=6 must render rotated to
+    # portrait (50x100). Sample points only match when exif_transpose is applied.
+    color = (10, 200, 40)
+    src = tmp_path / "rot.jpg"
+    img = Image.new("RGB", (100, 50), color)
+    exif = Image.Exif()
+    exif[0x0112] = 6  # Orientation: rotate for display
+    img.save(src, exif=exif.tobytes())
+
+    out = core.montage(
+        [src], tmp_path / "sheet.png", cell=100, padding=0, background="#000000"
+    )
+    with Image.open(out).convert("RGB") as sheet:
+        assert sheet.size == (100, 100)
+        # Portrait render occupies the horizontal center band (x in ~[25,75)),
+        # full height: top-center is image, left-center is background.
+        assert _close(sheet.getpixel((50, 5)), color)
+        assert sheet.getpixel((5, 50)) == (0, 0, 0)
+
+
+def test_montage_respects_explicit_columns_over_count(make_image, tmp_path):
+    # An explicit --columns wider than the image count must NOT be clamped;
+    # it yields a fixed-width sheet with trailing empty cells.
+    srcs = [make_image(f"m{i}.png", size=(40, 40)) for i in range(2)]
+    out = core.montage(srcs, tmp_path / "sheet.png", columns=4, cell=30, padding=5)
+    with Image.open(out) as img:
+        # 4 columns, 1 row regardless of only 2 images.
+        assert img.size == (5 + 4 * (30 + 5), 5 + 1 * (30 + 5))
+
+
+def test_montage_skips_missing_input(make_image, tmp_path):
+    # A missing path (InputNotFoundError) must be skipped, not abort the sheet.
+    good = make_image("good.png", size=(30, 30))
+    missing = tmp_path / "does-not-exist.png"
+    out = core.montage([good, missing], tmp_path / "sheet.png", cell=30, padding=0)
+    with Image.open(out) as img:
+        # Only the readable image counts -> a 1x1 grid, 30x30.
+        assert img.size == (30, 30)
+
+
+def test_montage_rejects_bad_color_tuple(make_image, tmp_path):
+    src = make_image("a.png")
+    with pytest.raises(ImageToolkitError):
+        core.montage([src], tmp_path / "sheet.png", background=(255, 0))
+    with pytest.raises(ImageToolkitError):
+        core.montage([src], tmp_path / "sheet.png", background=(300, 0, 0))
+
+
 # --------------------------------------------------------------------------- #
 # error handling shared across ops
 # --------------------------------------------------------------------------- #

@@ -306,7 +306,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("input", help="image file, directory, or glob")
     p.add_argument(
-        "--columns", type=int, default=None, help="grid columns (default: near-square)"
+        "--columns",
+        type=int,
+        default=None,
+        help="grid columns (default: near-square; an explicit value is used "
+        "as-is, even if it exceeds the image count)",
     )
     p.add_argument(
         "--cell", type=int, default=200, help="max thumbnail box in px (default 200)"
@@ -320,7 +324,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="sheet background: name or #RRGGBB (default white)",
     )
     p.add_argument(
-        "-o", "--out", help="output image file (default montage.png)"
+        "-o",
+        "--out",
+        help="output image file (default montage.png; an existing file at this "
+        "path is silently overwritten)",
     )
     p.add_argument(
         "-r",
