@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "image-toolkit"
 version = "0.1.0"
-description = "Batch image processing CLI: convert, resize, strip metadata, rotate/flip, thumbnail, grayscale, watermark, info. Built on Pillow. Zero network."
+description = "Batch image processing CLI: convert, resize, strip metadata, rotate/flip, thumbnail, grayscale, watermark, montage, info. Built on Pillow. Zero network."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }

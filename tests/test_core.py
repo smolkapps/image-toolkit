@@ -309,6 +309,77 @@ def test_watermark_rejects_bad_opacity(make_image):
 
 
 # --------------------------------------------------------------------------- #
+# montage (contact sheet)
+# --------------------------------------------------------------------------- #
+def test_montage_default_grid_dimensions(make_image, tmp_path):
+    # 4 images, cell 50, padding 10 -> auto 2x2 grid.
+    srcs = [make_image(f"m{i}.png", size=(80, 40)) for i in range(4)]
+    out = core.montage(srcs, tmp_path / "sheet.png", cell=50, padding=10)
+    assert out.exists()
+    with Image.open(out) as img:
+        # width = padding + cols*(cell+padding); cols=rows=2
+        assert img.size == (10 + 2 * (50 + 10), 10 + 2 * (50 + 10))
+        assert img.mode == "RGB"
+
+
+def test_montage_explicit_columns(make_image, tmp_path):
+    # 5 images in 5 columns -> a single row.
+    srcs = [make_image(f"m{i}.png", size=(40, 40)) for i in range(5)]
+    out = core.montage(srcs, tmp_path / "sheet.png", columns=5, cell=30, padding=5)
+    with Image.open(out) as img:
+        assert img.size == (5 + 5 * (30 + 5), 5 + 1 * (30 + 5))
+
+
+def test_montage_never_upscales_thumbnails(make_image, tmp_path):
+    # A tiny source must not be blown up to fill the cell.
+    src = make_image("tiny.png", size=(20, 10))
+    out = core.montage([src], tmp_path / "sheet.png", cell=200, padding=0)
+    # background is white; the pasted thumb stays 20x10, so most of the
+    # 200x200 sheet remains white.
+    with Image.open(out).convert("RGB") as img:
+        assert img.size == (200, 200)
+        assert img.getpixel((199, 199)) == (255, 255, 255)
+
+
+def test_montage_background_color(make_image, tmp_path):
+    src = make_image("a.png", size=(10, 10))
+    out = core.montage(
+        [src], tmp_path / "sheet.png", cell=40, padding=5, background="#ff0000"
+    )
+    with Image.open(out).convert("RGB") as img:
+        # A padding pixel in the corner is pure background.
+        assert img.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_montage_skips_unreadable_inputs(make_image, tmp_path):
+    good = make_image("good.png", size=(30, 30))
+    bad = tmp_path / "bad.png"
+    bad.write_text("not an image")
+    out = core.montage([good, bad], tmp_path / "sheet.png", cell=30, padding=0)
+    # Only the one readable image counts -> a 1x1 grid, 30x30.
+    with Image.open(out) as img:
+        assert img.size == (30, 30)
+
+
+def test_montage_empty_inputs_raises(tmp_path):
+    with pytest.raises(ImageToolkitError):
+        core.montage([], tmp_path / "sheet.png")
+
+
+def test_montage_all_unreadable_raises(tmp_path):
+    bad = tmp_path / "bad.png"
+    bad.write_text("nope")
+    with pytest.raises(ImageToolkitError):
+        core.montage([bad], tmp_path / "sheet.png")
+
+
+def test_montage_rejects_bad_cell(make_image, tmp_path):
+    src = make_image("a.png")
+    with pytest.raises(ImageToolkitError):
+        core.montage([src], tmp_path / "sheet.png", cell=0)
+
+
+# --------------------------------------------------------------------------- #
 # error handling shared across ops
 # --------------------------------------------------------------------------- #
 def test_missing_input_raises(tmp_path):

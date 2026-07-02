@@ -8,6 +8,7 @@ clean stderr message instead of a traceback.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -571,3 +572,97 @@ def watermark(
     else:
         final = composited
     return _save(final, out, fmt, keep_exif=keep_exif, src=src)
+
+
+# --------------------------------------------------------------------------- #
+# montage (contact sheet)
+# --------------------------------------------------------------------------- #
+def _parse_color(value) -> Tuple[int, int, int]:
+    """Accept an (r, g, b) tuple, a #RRGGBB / #RGB hex string, or a name."""
+    if isinstance(value, tuple):
+        return value
+    s = str(value).strip()
+    if s.startswith("#"):
+        h = s[1:]
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        if len(h) == 6:
+            try:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            except ValueError:
+                pass
+        raise ImageToolkitError(f"invalid hex color {value!r}")
+    # Fall back to Pillow's named-color table (e.g. "white", "black").
+    try:
+        from PIL import ImageColor
+
+        return ImageColor.getrgb(s)
+    except (ValueError, ImportError) as exc:
+        raise ImageToolkitError(f"invalid color {value!r}") from exc
+
+
+def montage(
+    in_paths,
+    out: PathLike,
+    *,
+    columns: Optional[int] = None,
+    cell: int = 200,
+    padding: int = 8,
+    background="#ffffff",
+) -> Path:
+    """Arrange many images into a single contact-sheet grid.
+
+    Each input is thumbnailed to fit within a ``cell`` x ``cell`` box (never
+    upscaled) and centered in its grid slot. Unreadable inputs are skipped; at
+    least one input must be a valid image. If ``columns`` is None a near-square
+    grid is chosen automatically. ``background`` may be an (r, g, b) tuple, a
+    ``#RRGGBB`` hex string, or a color name.
+    """
+    if cell <= 0:
+        raise ImageToolkitError("--cell must be a positive integer")
+    if padding < 0:
+        raise ImageToolkitError("--padding must be zero or positive")
+
+    paths = [Path(p) for p in in_paths]
+    if not paths:
+        raise ImageToolkitError("montage needs at least one input image")
+
+    bg = _parse_color(background)
+
+    thumbs = []
+    for p in paths:
+        try:
+            src = _open(p)
+        except UnsupportedFormatError:
+            continue  # skip anything we can't decode; keep the sheet going
+        thumb = src.convert("RGBA")
+        thumb.thumbnail((cell, cell), Image.LANCZOS)
+        thumbs.append(thumb)
+
+    if not thumbs:
+        raise ImageToolkitError("no readable images to build a montage from")
+
+    n = len(thumbs)
+    if columns is None:
+        columns = max(1, int(math.ceil(math.sqrt(n))))
+    else:
+        if columns <= 0:
+            raise ImageToolkitError("--columns must be a positive integer")
+        columns = min(columns, n)
+    rows = int(math.ceil(n / columns))
+
+    sheet_w = padding + columns * (cell + padding)
+    sheet_h = padding + rows * (cell + padding)
+    sheet = Image.new("RGB", (sheet_w, sheet_h), bg)
+
+    for idx, thumb in enumerate(thumbs):
+        row, col = divmod(idx, columns)
+        cell_x = padding + col * (cell + padding)
+        cell_y = padding + row * (cell + padding)
+        # Center the (possibly smaller) thumbnail within its cell.
+        off_x = cell_x + (cell - thumb.width) // 2
+        off_y = cell_y + (cell - thumb.height) // 2
+        sheet.paste(thumb, (off_x, off_y), mask=thumb.split()[-1])
+
+    fmt = normalize_format(Path(out).suffix or "png")
+    return _save(sheet, out, fmt, keep_exif=False)
