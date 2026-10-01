@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
-from .core import ImageToolkitError
+from .core import ImageToolkitError, _check_new_output
 
 # Extensions we treat as images when scanning a directory.
 IMAGE_EXTS = {
@@ -113,12 +113,18 @@ def run_batch(
     recursive: bool = False,
     op_kwargs: Optional[dict] = None,
     single_out: Optional[Path] = None,
+    output_path: Optional[Callable[..., Path]] = None,
 ) -> BatchResult:
     """Apply ``op(in_path, ..., outdir=<dir>)`` to each input.
 
     ``op`` must accept a positional input path and an ``outdir`` keyword. For
     the single-file case the caller may pass ``single_out`` to honor an explicit
     ``-o/--out`` path (only valid when there is exactly one input).
+
+    When ``output_path(in_path, outdir=<dir>)`` is supplied, plan and validate
+    every destination before running any operation. Existing paths, aliases,
+    case-only collisions and file/directory collisions abort the whole batch.
+    In this case ``op`` must accept an explicit ``out`` keyword.
     """
     op_kwargs = dict(op_kwargs or {})
     result = BatchResult(inputs=list(inputs))
@@ -132,13 +138,46 @@ def run_batch(
             result.failures.append((in_path, str(exc)))
         return result
 
-    for in_path in inputs:
+    planned = None
+    if output_path is not None:
+        try:
+            planned = []
+            identities = {}
+            for in_path in inputs:
+                in_path = Path(in_path)
+                target_dir = _out_path_for(
+                    in_path, base=base, outdir=outdir, recursive=recursive
+                )
+                out = Path(output_path(in_path, outdir=target_dir))
+                _check_new_output(out)
+                # Conservatively reject case-only names on all platforms so
+                # plans remain safe on case-insensitive destination volumes.
+                identity = str(out.resolve()).casefold()
+                if identity in identities:
+                    raise ImageToolkitError(f"output collision: {out}")
+                identities[identity] = out
+                planned.append(out)
+            for identity, out in identities.items():
+                if any(
+                    str(parent) in identities for parent in Path(identity).parents
+                ):
+                    raise ImageToolkitError(f"output file/directory collision: {out}")
+        except (ImageToolkitError, OSError, RuntimeError) as exc:
+            result.failures.extend(
+                (Path(in_path), f"unsafe batch outputs: {exc}") for in_path in inputs
+            )
+            return result
+
+    for index, in_path in enumerate(inputs):
         in_path = Path(in_path)
         target_dir = _out_path_for(
             in_path, base=base, outdir=outdir, recursive=recursive
         )
         try:
-            out = op(in_path, outdir=target_dir, **op_kwargs)
+            if planned is not None:
+                out = op(in_path, out=planned[index], **op_kwargs)
+            else:
+                out = op(in_path, outdir=target_dir, **op_kwargs)
             result.outputs.append(Path(out))
         except ImageToolkitError as exc:
             result.failures.append((in_path, str(exc)))

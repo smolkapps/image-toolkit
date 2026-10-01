@@ -76,6 +76,20 @@ image-toolkit info photo.jpg
 
 ## Behavior notes
 
+- **Outputs must be new paths.** Existing files, directories, symlinks
+  (including dangling links), and hardlinks are rejected, including an output
+  that names the input. Pick a new name or output directory when retrying a
+  completed operation. Images are encoded into a private sibling temporary file
+  and published atomically without replacing another file. If encoding or
+  publication fails, the temporary file is removed and existing files stay intact.
+  Destination filesystems must support hard links; otherwise writing fails safely.
+- **Conversion batches check destinations before writing.** Colliding names,
+  symlink-parent aliases, case-only names, existing outputs, and file/directory
+  conflicts reject the whole batch. For example, `photo.png` and `photo.bmp`
+  cannot both become `photo.jpg` in one directory. Use distinct names or separate
+  output directories. Library `run_batch` callers can supply an `output_path`
+  planner for the same preflight; without it, a later collision is reported as a
+  failure while earlier successful outputs remain intact.
 - **Never upscales on `--max` / `thumbnail`** — if the image is already smaller
   than the target, dimensions are left unchanged.
 - **Aspect ratio is preserved by default.** Supplying both `--width` and

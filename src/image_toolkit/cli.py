@@ -51,7 +51,13 @@ def _report(result: BatchResult) -> int:
 
 
 def _dispatch(
-    args, op, op_kwargs: dict, *, allow_out: bool = True, allow_outdir: bool = True
+    args,
+    op,
+    op_kwargs: dict,
+    *,
+    allow_out: bool = True,
+    allow_outdir: bool = True,
+    output_path=None,
 ) -> int:
     """Common path: collect inputs, run the op over them, report."""
     recursive = getattr(args, "recursive", False)
@@ -79,6 +85,7 @@ def _dispatch(
         recursive=recursive,
         op_kwargs=op_kwargs,
         single_out=single_out,
+        output_path=output_path,
     )
     return _report(result)
 
@@ -88,7 +95,10 @@ def _dispatch(
 # --------------------------------------------------------------------------- #
 def cmd_convert(args) -> int:
     op = partial(core.convert, to=args.to)
-    return _dispatch(args, op, {})
+    output_path = partial(
+        core._default_out, suffix="", fmt=core.normalize_format(args.to)
+    )
+    return _dispatch(args, op, {}, output_path=output_path)
 
 
 def cmd_resize(args) -> int:
@@ -326,8 +336,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "-o",
         "--out",
-        help="output image file (default montage.png; an existing file at this "
-        "path is silently overwritten)",
+        help="new output image file (default montage.png; "
+        "existing paths are rejected)",
     )
     p.add_argument(
         "-r",

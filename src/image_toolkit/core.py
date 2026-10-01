@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -122,6 +123,16 @@ def _ensure_parent(path: PathLike) -> None:
         parent.mkdir(parents=True, exist_ok=True)
 
 
+def _check_new_output(path: PathLike) -> None:
+    """Reject existing leaves (including dangling links) and file parents."""
+    out = Path(path)
+    if os.path.lexists(out):
+        raise ImageToolkitError(f"refusing to overwrite existing output: {out}")
+    for parent in out.parents:
+        if os.path.lexists(parent) and not parent.is_dir():
+            raise ImageToolkitError(f"output parent is not a directory: {parent}")
+
+
 def _flatten_if_needed(
     img: Image.Image, fmt: str, background=(255, 255, 255)
 ) -> Image.Image:
@@ -143,14 +154,13 @@ def _save(
     src: Optional[Image.Image] = None,
     **save_kwargs,
 ) -> Path:
-    """Save ``img`` as ``fmt`` to ``out``.
+    """Encode ``img`` completely, then publish a new output without replacing.
 
     By default metadata (EXIF) is dropped because a fresh Image created by a
     transform carries no exif unless we copy it. When ``keep_exif`` is True we
     pull exif from ``src`` (the originally opened image) if present.
     """
     out = Path(out)
-    _ensure_parent(out)
     img = _flatten_if_needed(img, fmt)
 
     if keep_exif and src is not None:
@@ -164,7 +174,28 @@ def _save(
     if fmt == "WEBP":
         save_kwargs.setdefault("quality", 90)
 
-    img.save(out, format=fmt, **save_kwargs)
+    try:
+        _check_new_output(out)
+        _ensure_parent(out)
+        # Resolve the parent once so a symlink alias cannot redirect the
+        # staging file and publication to different directories.
+        target = out.parent.resolve() / out.name
+        with tempfile.NamedTemporaryFile(
+            dir=target.parent, prefix=".image-toolkit-", suffix=".tmp"
+        ) as staged:
+            img.save(staged, format=fmt, **save_kwargs)
+            staged.flush()
+            os.fsync(staged.fileno())
+            # A hard link is an atomic create-only publication. Unlike rename
+            # or replace, it also refuses a destination created during encoding.
+            # Filesystems without hard-link support fail closed.
+            os.link(staged.name, target)
+    except FileExistsError as exc:
+        raise ImageToolkitError(
+            f"refusing to overwrite existing output: {out}"
+        ) from exc
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise ImageToolkitError(f"cannot write output {out}: {exc}") from exc
     return out
 
 
@@ -250,7 +281,8 @@ def convert(
 
     ``to`` is an extension-ish token or canonical format name. If ``out`` is
     None a sibling file (or one under ``outdir``) named ``<stem>.<ext>`` is used.
-    EXIF is preserved by default (use strip-exif to remove it).
+    EXIF is preserved by default (use strip-exif to remove it). The output
+    must be new; existing files and aliases of the input are rejected.
     """
     fmt = normalize_format(to)
     src = _open(in_path)
@@ -660,8 +692,7 @@ def montage(
     images, giving a fixed-width sheet with trailing empty cells). ``background``
     may be an (r, g, b) tuple, a ``#RRGGBB`` hex string, or a color name.
 
-    ``out`` is written unconditionally: an existing file at that path is
-    silently overwritten.
+    ``out`` must be a new path; existing files or links are rejected.
     """
     if cell <= 0:
         raise ImageToolkitError("--cell must be a positive integer")
